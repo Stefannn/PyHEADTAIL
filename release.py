@@ -5,9 +5,9 @@ workflow, cf. the PyHEADTAIL wiki:
 https://github.com/PyCOMPLETE/PyHEADTAIL/wiki/Our-Development-Workflow
 
 Requires git, hub (the github tool, https://hub.github.com/) and importlib
-(included in python >=2.7) installed.
+(included in python >=2.7) to be installed.
 
-Should be PEP440 conformal.
+Conforms with PEP440 (especially the versioning needs to follow this).
 
 @copyright: CERN
 @date: 26.01.2017
@@ -18,19 +18,27 @@ import argparse
 import importlib # available from PyPI for Python <2.7
 import os, subprocess
 
+# python2/3 compatibility for raw_input/input:
+if hasattr(__builtins__, 'raw_input'):
+    input = raw_input
+
 # CONFIG
 version_location = 'PyHEADTAIL._version' # in python relative module notation
 # (e.g. PyHEADTAIL._version for PyHEADTAIL/_version.py)
 test_script_location = 'prepush' # in python relative module notation
 release_branch_prefix = 'release/v' # prepended name of release branch
+github_user = 'PyCOMPLETE'
+github_repo = 'PyHEADTAIL'
 
 
 parser = argparse.ArgumentParser(
     description=(
         'Release a new version of PyHEADTAIL in 2 steps:\n'
         '1. prepare new release from develop branch '
-        '(requires release type argument)\n'
-        '2. publish new release (requires to be on release branch already)'),
+        '(requires release type argument "part")\n'
+        '2. publish new release (requires to be on release branch already)\n'
+        'optionally: release PyHEADTAIL to PyPI '
+        '(requires to be on master branch)'),
     formatter_class=argparse.RawTextHelpFormatter
 )
 parser.add_argument(
@@ -69,6 +77,15 @@ def get_version(version_location):
     '''Retrieve the version from version_location file.'''
     return importlib.import_module(version_location).__version__
 
+def do_tag_and_version_match(version):
+    '''Return whether the current git tag and the given version match.
+    NB: returns True if and only if the current commit is tagged with
+    the version tag.
+    '''
+    current_commit = subprocess.check_output(
+        ['git', 'describe', '--dirty']).rstrip().decode("utf-8")
+    return current_commit == 'v{}'.format(version)
+
 def which_part_increases(last_version, new_version):
     '''Return a string which version part is increased. Raise an error
     if new_version is not a valid direct successor to last_version.
@@ -95,6 +112,22 @@ def which_part_increases(last_version, new_version):
         raise ValueError(
             'new_version is not a direct successor of last_version.')
 
+def validate_release_version(version_location):
+    '''Validate the new release version new_version by comparing the
+    release branch name to the bumped previous version last_version,
+    which is read from version_location.
+    Raise an error if new_version is not a valid direct successor to
+    last_version. Return new_version.
+    '''
+    last_version = get_version(version_location)
+    release_version = current_branch()[len(release_branch_prefix):]
+
+    # make sure release_version incrementally succeeds last_version
+    which_part_increases(last_version, release_version)
+
+    return release_version
+
+
 def establish_new_version(version_location):
     '''Write the new release version to version_location.
     Check that this agrees with the bumped previous version.
@@ -103,11 +136,7 @@ def establish_new_version(version_location):
         - version_location: string, relative python module notation
         (e.g. PyHEADTAIL._version for PyHEADTAIL/_version.py)
     '''
-    last_version = get_version(version_location)
-    release_version = current_branch()[len(release_branch_prefix):]
-
-    # make sure release_version incrementally succeeds last_version
-    which_part_increases(last_version, release_version)
+    release_version = validate_release_version(version_location)
 
     vpath = version_location.replace('.', '/') + '.py'
     with open(vpath, 'wt') as vfile:
@@ -125,12 +154,86 @@ def ensure_hub_is_installed():
     '''
     try:
         assert subprocess.call(["hub", "--version"]) == 0
-    except OSError:
+    except (OSError, AssertionError):
         raise OSError(
             'The github command-line tool is needed for '
             'opening the pull request for the release. '
             'Please install hub from https://hub.github.com/ !'
         )
+
+def ensure_gothub_is_installed():
+    '''Check whether gothub (to draft github releases) is installed.
+    If not, throw an error with an installation note.
+    '''
+    try:
+        assert subprocess.call(["gothub", "--version"]) == 0
+    except (OSError, AssertionError):
+        raise OSError(
+            'The gothub command-line tool is needed for '
+            'drafting releases on github. '
+            'Please install gothub from '
+            'https://github.com/itchio/gothub !'
+        )
+
+def check_or_setup_github_OAuth_token():
+    '''Check if github OAuth security token is set as an environment
+    variable. If not ask for it and give instruction how to get it.
+    The token is needed for gothub.
+    '''
+    if os.environ.get('GITHUB_TOKEN', None):
+        print ('\n*** github OAuth security token found in $GITHUB_TOKEN.\n')
+        return
+    print (
+        '\n*** No github OAuth security token found in $GITHUB_TOKEN.'
+        ' You need the token for gothub to draft the release on github!'
+        ' (Get the security token via github\'s website, cf.'
+        '\n*** https://help.github.com/articles/creating-a-personal-access-'
+        'token-for-the-command-line/ )\n')
+    token = input('--> Please enter your github OAuth security token:\n')
+    os.environ['GITHUB_TOKEN'] = token
+
+def ensure_gitpulls_is_installed():
+    '''Check whether the gem git-pulls (to get github pull requests) is
+    installed.
+    If not, throw an error with an installation note.
+    '''
+    try:
+        assert subprocess.call(["git", "pulls"]) == 0
+    except (OSError, AssertionError):
+        raise OSError(
+            'The gothub command-line tool is needed for '
+            'checking the pull request text from the release. '
+            'Please install git-pulls '
+            'from https://github.com/schacon/git-pulls !'
+        )
+
+def check_release_tools():
+    '''Return whether git-pulls and gothub are installed (needed for
+    drafting the github release from CLI). If not, ask whether user
+    wants to continue and draft the release manually (if this is not
+    the case, raise exception!).
+    If no github OAuth security token is set, ask for it.
+    '''
+    try:
+        ensure_gitpulls_is_installed()
+        ensure_gothub_is_installed()
+        check_or_setup_github_OAuth_token()
+        return True
+    except OSError:
+        answer = ''
+        accept = ['y', 'yes', 'n', 'no']
+        while answer not in accept:
+            answer = input(
+                '!!! You do not have all required tools installed to '
+                'automatically draft a release. Do you want to continue '
+                'and manually draft the release on github afterwards?\n'
+                '[y/N] ').lower()
+            if not answer:
+                answer = 'n'
+        if answer == 'n' or answer == 'no':
+            raise
+        else:
+            return False
 
 def current_branch():
     '''Return current git branch name.'''
@@ -172,14 +275,42 @@ def git_status():
     )
     print (output)
 
+def get_pullrequest_message(release_version):
+    '''Fetch message from open pull request corresponding to this
+    release_version.
+    '''
+    fetched = subprocess.check_output(['git', 'pulls', 'update'])
+    pr_number = None
+    for line in fetched.split('\n'):
+        if "PyCOMPLETE:release/v{}".format(release_version) in line:
+            pr_number = line.split()[0]
+            break
+    if pr_number is None:
+        raise EnvironmentError(
+            'Could not find open pull request for this release version. '
+            'Did you properly initiate the release process '
+            '(step 1 in ./release.py --help)?')
+    text = subprocess.check_output(['git', 'pulls', 'show', pr_number])
+    output = []
+    for line in text.split('\n')[5:]:
+        if line != '------------':
+            output.append(line)
+        else:
+            break
+    output[0] = output[0][11:] # remove "Title    : "
+    return '\n'.join(output)
+
 
 # DEFINE TWO STEPS FOR RELEASE PROCESS:
 
 def init_release(part):
     '''Initialise release process.'''
-    if not current_branch() == 'develop':
+    if not current_branch() == 'develop' and not (
+            current_branch()[:7] == 'hotfix/' and
+            part == 'patch'):
         raise EnvironmentError(
-            'Releases can only be initiated from the develop branch!')
+            'Releases can only be initiated from the develop branch! '
+            '(Releasing a patch is allowed from a hotfix/ branch as well.)')
     if is_worktree_dirty():
         git_status()
         raise EnvironmentError('Release process can only be initiated on '
@@ -213,6 +344,14 @@ def finalise_release():
         raise EnvironmentError('The PyHEADTAIL tests fail. Please fix '
                                'the tests first!')
     print ('*** The PyHEADTAIL tests have successfully terminated.')
+
+    # all tools installed to automatically draft release?
+    draft_release = check_release_tools()
+    if draft_release:
+        new_version = validate_release_version(version_location)
+        message = get_pullrequest_message(new_version)
+
+    # bump version file
     new_version = establish_new_version(version_location)
 
     # make sure to push any possible release branch commits
@@ -240,11 +379,50 @@ def finalise_release():
     assert subprocess.call(["git", "merge", "master"]) == 0
     assert subprocess.call(["git", "push", "origin", "develop"]) == 0
 
-    # TO DO: publish github release (with text from pull request open in editor)
-
     # delete release branch
     assert subprocess.call(["git", "branch", "-d", rbranch]) == 0
     assert subprocess.call(["git", "push", "origin", ":" + rbranch]) == 0
+
+    # publish github release (with message from pull request)
+    if draft_release:
+        release_failed = subprocess.call(
+            ['gothub', 'release', '-u', github_user, '-r', github_repo,
+             '-t', 'v' + new_version,
+             '-n', '"PyHEADTAIL v{}"'.format(new_version),
+             '-d', '"{}"'.format(message),
+             '-c', 'master'])
+        if release_failed:
+            print ('*** Drafting the release via gothub failed. '
+                   'Did you provide the correct github OAuth security '
+                   'token via $GITHUB_TOKEN? '
+                   'You may draft this release manually from the '
+                   'github website.')
+    else:
+        print ('*** Remember to manually draft this release from the '
+               'github website.')
+
+def release_pip():
+    '''Release current version from master branch to PyPI.'''
+    if is_worktree_dirty():
+        git_status()
+        raise EnvironmentError('Release process can only be initiated on '
+                               'a clean git repository. You have uncommitted '
+                               'changes in your files, please fix this first.')
+    if current_branch() != "master":
+        raise EnvironmentError(
+            'PyPI releases can only be initiated from the master branch!')
+    current_version = get_version(version_location)
+    if not do_tag_and_version_match(current_version):
+        raise EnvironmentError(
+            'the current master branch commit needs to be the tagged version '
+            'which matches the version stored in the version file!')
+
+    assert subprocess.call(['python', 'setup.py', 'sdist']) == 0
+    assert subprocess.call(
+        ['twine', 'upload', '-r', 'pypi',
+         'dist/PyHEADTAIL-{}.tar.gz'.format(current_version)]) == 0
+    assert subprocess.call(['rm', '-r', 'dist', 'PyHEADTAIL.egg-info']) == 0
+
 
 # ALGORITHM FOR RELEASE PROCESS:
 if __name__ == '__main__':
@@ -254,7 +432,10 @@ if __name__ == '__main__':
     # are we on a release branch already?
     if not (current_branch()[:len(release_branch_prefix)] ==
             release_branch_prefix):
-        args = parser.parse_args()
-        init_release(args.part)
+        if current_branch() == 'master':
+            release_pip()
+        else:
+            args = parser.parse_args()
+            init_release(args.part)
     else:
         finalise_release()

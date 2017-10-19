@@ -6,6 +6,8 @@ for simulating macro-particle beam dynamics with collective effects.
 
 Installation
 ------------
+We recommend to use Anaconda (Python 2.7) to make the installation easier.
+You can obtain it from anaconda.org
 
 Installation of PyHEADTAIL on linux (having git installed)
 is straight forward.
@@ -28,8 +30,6 @@ And there you go, start using PyHEADTAIL!
 
 .. code-block:: bash
 
-    $ cd ..
-
     $ ipython
 
     ...
@@ -38,6 +38,7 @@ And there you go, start using PyHEADTAIL!
 
     PyHEADTAIL v1.11.2
 
+It is recommended to add the PyHEADTAIL path to your PYTHONPATH.
 
 -------------------------------------------------------------------------------
 
